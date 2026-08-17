@@ -1,0 +1,12 @@
+CoqMakefile
+CoqMakefile.conf
+.CoqMakefile.d
+.lia.cache
+*.vo
+*.vok
+*.vos
+*.glob
+.*.aux
+Obfuscator/extraction/_build/
+**/__pycache__/
+*.py[cod]

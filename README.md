@@ -1,10 +1,24 @@
 # Quantum Circuit Obfuscator
 
+> **Correctness-repair fork.** This fork fixes several source-level defects in
+> the upstream research prototype and adds structural regression checks.  The
+> historical QASM files in `Obfuscator/results/` predate those repairs and are
+> known to contain invalid same-wire CNOT instructions.  See
+> [REPAIRS.md](REPAIRS.md) for the exact fixes, validation status, remaining
+> work, and security limitations.  This software is not an implementation of
+> indistinguishability obfuscation or virtual-black-box obfuscation.
+
 This repository contains an implementation of an obfuscator for quantum circuits. It is the accompanying software artifact for the paper **Scalable Verification of Quantum Supremacy based on Circuit Obfuscation** *Shouvanik Chakrabarti, Chi-Ning Chou, Kai-Min Chung, and Xiaodi Wu*.
 
 ## Overview
 
-The obfuscator takes as input a quantum circuit and increases the number of qubits (by 100) and the number of quantum gates, while producing an 'obfuscated' version of the circuit that is functionally equivalent.
+The intended behavior is to take a quantum circuit, add 100 wires and more
+gates, and produce a rewritten circuit with the same logical behavior.  In
+this repair fork, that equivalence remains a property to be established by a
+whole-circuit proof or independent equivalence tests.  The repaired source has
+been compiled and re-extracted, and both outputs from a small smoke test pass
+the strict structural audit, but those checks do not by themselves prove
+equivalence.
 
 The obfuscator is based on primitives from **SQIR**, a Small Quantum Intermediate Representation for quantum programs, and the Verified Optimizer for Quantum Circuits **(VOQC)**. The repository is built upon a clone of the [SQIR repository](https://github.com/inQWIRE/SQIR). The implementation of the obfuscator is found under the Obfuscator subdirectory.
 
@@ -22,7 +36,13 @@ Install opam using the appropriate instructions for your system found [here](htt
   * menhir (`opam install menhir`)
   * OCaml OpenQASM parser (`opam install openQASM`)
 
-Once the dependencies are installed the obfuscator can be compiled by running `make obfuscator` in the parent directory. This will produce an executable in Obfuscator/_build/default.
+Once the dependencies are installed, run `make obfuscator` in the repository
+root.  This produces
+`Obfuscator/extraction/_build/default/obfuscator.exe`.
+
+This repair branch has also been built successfully with OCaml 4.12.0, Coq
+8.13.2, and dune 3.24.2.  See [REPAIRS.md](REPAIRS.md) for the compatibility
+changes and exact validation performed.
 
 ## Execution
 
@@ -38,12 +58,18 @@ This returns an obfuscated version of `<input_file>` in `<output_file>`, and a v
 
 `dune exec ./obfuscator.exe benchmarks/Arithmetic_and_Toffoli/tof_5.qasm out.qasm optimized_voqc.qasm --root extraction`
 
+By default each run receives fresh pseudo-random initialization.  Append
+`-- --seed 123` to make a run reproducible.  The generated QASM contains
+comments giving the final physical location of every original logical wire.
+Downstream tools must preserve or consume this original logical-wire placement
+map.
+
 # Running the benchmarks
 
-The benchmark script has the following depencencies.
+The benchmark script has the following dependencies.
 * **Python**: The benchmarking script requires a working Python 3 distribution that can be obtained [here](https://www.python.org/downloads/). 
-* **Qiskit**: The Qiskit package can be installed using any python package manager. If `pip` is used, simply run
-`pip install numpy`.
+* **Python packages**: Install NumPy, Qiskit, and PyZX with a compatible Python
+  package manager.  For example: `pip install numpy qiskit pyzx`.
 * **staq** : A clone of the staq repository is included under Obfuscator/benchmarks/staq. To build the executable for a UNIX based system with `cmake` and a C++ distribution , run the following commands in this directory
 
 ``` sh
@@ -53,7 +79,9 @@ make staq
 ```
 For other systems follow the [installation instructions](https://github.com/softwareQinc/staq) for staq in the directory Obfuscator/benchmarks/staq.
 
-Given all the dependencies the script `Obfuscator/run_benchmark.py` will execute all the benchmarks and return CSV formatted results in a file given as input. Running the command
+Given all the dependencies, `Obfuscator/run_benchmarks.py` executes the
+benchmarks and writes CSV-formatted results to the file supplied on the command
+line.  Running
 
 ``` sh
 python run_benchmarks.py results.csv

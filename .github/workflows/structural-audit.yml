@@ -1,0 +1,29 @@
+name: Structural QASM audit
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  qasm-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run structural-audit regression tests
+        run: python -m unittest discover -s tests -p "test_*.py" -v
+
+      - name: Inventory historical bundled outputs
+        run: >-
+          python tests/audit_obfuscated_qasm.py
+          --report-only
+          Obfuscator/results/*-obfuscated.qasm

@@ -3,8 +3,11 @@ Require Import ClassicalStates.
 Require Export RzkGateSet.
 Require Import FSets.FMapAVL.
 Require Import FSets.FMapFacts.
+Require Import FSets.FSetProperties.
 
-Module FSetProps := FSetProperties.Properties FSet.
+(* [Properties] was an alias accepted by the original Coq 8.10 build.  Use
+   the underlying functor name so this also compiles with newer Coq releases. *)
+Module FSetProps := FSetProperties.WProperties FSet.
 Module FMap := FMapAVL.Make(Coq.Structures.OrderedTypeEx.Nat_as_OT).
 Module FMapFacts := FMapFacts.Facts FMap.
 
@@ -909,5 +912,3 @@ Proof.
   symmetry in H.
   apply uc_equiv_l_implies_WT in H; assumption.
 Qed.
-
-

@@ -418,8 +418,8 @@ module Z =
 
   (** val pow_pos : int -> int -> int **)
 
-  let pow_pos z0 =
-    Pos.iter (mul z0) 1
+  let pow_pos z1 =
+    Pos.iter (mul z1) 1
 
   (** val pow : int -> int -> int **)
 
@@ -450,7 +450,7 @@ module Z =
 
   (** val eqb : int -> int -> bool **)
 
-  let rec eqb x0 y =
+  let eqb x0 y =
     (fun f0 fp fn z -> if z=0 then f0 () else if z>0 then fp z else fn (-z))
       (fun _ ->
       (fun f0 fp fn z -> if z=0 then f0 () else if z>0 then fp z else fn (-z))
@@ -614,24 +614,6 @@ module KeyOrderedType =
   module MO = Coq_OrderedTypeFacts(O)
  end
 
-module Nat_as_OT =
- struct
-  type t = int
-
-  (** val compare : int -> int -> int compare0 **)
-
-  let compare x0 y =
-    match Nat.compare x0 y with
-    | Eq -> EQ
-    | Lt -> LT
-    | Gt -> GT
-
-  (** val eq_dec : int -> int -> bool **)
-
-  let eq_dec =
-    (=)
- end
-
 module type Int =
  sig
   type t
@@ -752,6 +734,24 @@ module Z_as_Int =
 
   let i2z n =
     n
+ end
+
+module Nat_as_OT =
+ struct
+  type t = int
+
+  (** val compare : int -> int -> int compare0 **)
+
+  let compare x0 y =
+    match Nat.compare x0 y with
+    | Eq -> EQ
+    | Lt -> LT
+    | Gt -> GT
+
+  (** val eq_dec : int -> int -> bool **)
+
+  let eq_dec =
+    (=)
  end
 
 module MakeListOrdering =
@@ -1872,9 +1872,9 @@ let p q =
 let pDAG q =
   App1 (uRzk_PDAG, q)
 
-(** val z : int -> rzk_Unitary gate_app **)
+(** val z0 : int -> rzk_Unitary gate_app **)
 
-let z q =
+let z0 q =
   App1 (uRzk_Z, q)
 
 (** val rz : int -> int -> rzk_Unitary gate_app **)
@@ -4432,7 +4432,7 @@ let rec propagate_X0 l q n =
       else (match u with
             | App1 (r, n0) ->
               (match r with
-               | URzk_H -> u :: ((z q) :: t1)
+               | URzk_H -> u :: ((z0 q) :: t1)
                | URzk_X -> t1
                | URzk_Rz i -> (invert_rotation i n0) :: (propagate_X0 t1 q n')
                | URzk_CNOT -> (x q) :: l)
@@ -4481,6 +4481,11 @@ let optimize l =
                 (cancel_two_qubit_gates
                   (hadamard_reduction (not_propagation l)))))))))
 
+(** val swap_qubit_index : int -> int -> int -> int **)
+
+let swap_qubit_index q1 q2 q =
+  if (=) q q1 then q2 else if (=) q q2 then q1 else q
+
 (** val swap_qubits :
     int -> int -> int -> rzk_ucom_l -> rzk_Unitary gate_app list **)
 
@@ -4489,22 +4494,13 @@ let rec swap_qubits dim q1 q2 = function
 | g :: t1 ->
   (match g with
    | App1 (u, n) ->
-     if (=) n q1
-     then (App1 (u, q2)) :: (swap_qubits dim q1 q2 t1)
-     else if (=) n q2
-          then (App1 (u, q1)) :: (swap_qubits dim q1 q2 t1)
-          else (App1 (u, n)) :: (swap_qubits dim q1 q2 t1)
+     (App1 (u, (swap_qubit_index q1 q2 n))) :: (swap_qubits dim q1 q2 t1)
    | App2 (u, m, n) ->
-     if (=) m q1
-     then (App2 (u, q2, n)) :: (swap_qubits dim q1 q2 t1)
-     else if (=) n q1
-          then (App2 (u, m, q2)) :: (swap_qubits dim q1 q2 t1)
-          else if (=) m q2
-               then (App2 (u, q1, n)) :: (swap_qubits dim q1 q2 t1)
-               else if (=) n q2
-                    then (App2 (u, m, q1)) :: (swap_qubits dim q1 q2 t1)
-                    else (App2 (u, m, n)) :: (swap_qubits dim q1 q2 t1)
-   | App3 (u, m, n, p0) -> (App3 (u, m, n, p0)) :: (swap_qubits dim q1 q2 t1))
+     (App2 (u, (swap_qubit_index q1 q2 m),
+       (swap_qubit_index q1 q2 n))) :: (swap_qubits dim q1 q2 t1)
+   | App3 (u, m, n, p0) ->
+     (App3 (u, (swap_qubit_index q1 q2 m), (swap_qubit_index q1 q2 n),
+       (swap_qubit_index q1 q2 p0))) :: (swap_qubits dim q1 q2 t1))
 
 (** val h_create_rule' :
     int -> int -> rzk_ucom_l -> rzk_Unitary gate_app list option **)
@@ -4604,13 +4600,7 @@ let add_obfuscated_X dim m n q l =
 let rz_create_rule' _ i q l =
   Some
     (app ((rz i q) :: [])
-      (app
-        ((rz
-           (Z.sub ((fun p->2*p) ((fun p->2*p) ((fun p->2*p) ((fun p->2*p)
-             ((fun p->2*p) ((fun p->2*p) ((fun p->2*p) ((fun p->2*p)
-             ((fun p->2*p) ((fun p->2*p) ((fun p->2*p) ((fun p->2*p)
-             ((fun p->2*p) ((fun p->2*p) ((fun p->2*p) 1))))))))))))))) i) q) :: [])
-        l))
+      (app ((rz (Z.sub (Z.mul ((fun p->2*p) 1) rzk_k) i) q) :: []) l))
 
 (** val rz_create_rule :
     int -> int -> int -> int -> rzk_ucom_l -> rzk_Unitary gate_app list option **)
@@ -4887,7 +4877,7 @@ let rec get_random_circuit dim crand qrand arand =
                        (fun n4 ->
                        (fun fO fS n -> if n=0 then fO () else fS (n-1))
                          (fun _ ->
-                         (z h') :: (get_random_circuit dim t1 t' t''))
+                         (z0 h') :: (get_random_circuit dim t1 t' t''))
                          (fun n5 ->
                          (fun fO fS n -> if n=0 then fO () else fS (n-1))
                            (fun _ ->
@@ -4928,29 +4918,29 @@ let rec get_random_circuit' dim crand qrand arand =
         | [] -> []
         | h'' :: t'' ->
           ((fun fO fS n -> if n=0 then fO () else fS (n-1))
-             (fun _ -> get_random_circuit dim t1 t' t'')
+             (fun _ -> get_random_circuit' dim t1 t' t'')
              (fun n ->
              (fun fO fS n -> if n=0 then fO () else fS (n-1))
                (fun _ ->
-               (x h') :: (get_random_circuit dim t1 t' t''))
+               (x h') :: (get_random_circuit' dim t1 t' t''))
                (fun n0 ->
                (fun fO fS n -> if n=0 then fO () else fS (n-1))
                  (fun _ ->
-                 (x h') :: (get_random_circuit dim t1 t' t''))
+                 (x h') :: (get_random_circuit' dim t1 t' t''))
                  (fun n1 ->
                  (fun fO fS n -> if n=0 then fO () else fS (n-1))
                    (fun _ ->
-                   (rz h'' h') :: (get_random_circuit dim t1 t' t''))
+                   (rz h'' h') :: (get_random_circuit' dim t1 t' t''))
                    (fun n2 ->
                    (fun fO fS n -> if n=0 then fO () else fS (n-1))
                      (fun _ ->
-                     (x h') :: (get_random_circuit dim t1 t' t''))
+                     (x h') :: (get_random_circuit' dim t1 t' t''))
                      (fun n3 ->
                      (fun fO fS n -> if n=0 then fO () else fS (n-1))
                        (fun _ ->
                        (cNOT h' (add h' (Nat.modulo (Pervasives.succ 0) dim))) :: 
-                       (get_random_circuit dim t1 t' t''))
-                       (fun _ -> get_random_circuit dim t1 t' t'')
+                       (get_random_circuit' dim t1 t' t''))
+                       (fun _ -> get_random_circuit' dim t1 t' t'')
                        n3)
                      n2)
                    n1)
@@ -5021,7 +5011,7 @@ let rec add_local_obfuscation dim orand qorand norand morand aorand l =
     -> int list -> int list -> int list -> int list -> int list -> int list
     -> int list -> int list -> rzk_ucom_l **)
 
-let obfuscate dim dim2 l crand qrand arand orand1 qorand1 norand1 morand1 arand1 orand2 qorand2 norand2 morand2 arand2 mergerand _ _ _ _ =
+let obfuscate dim dim2 l crand qrand arand orand1 qorand1 norand1 morand1 arand1 orand2 qorand2 norand2 morand2 arand2 mergerand nrand mrand l1rand l2rand =
   let expanded = expand_circuit dim (add dim dim2) l in
   let firstpass =
     add_local_obfuscation (add dim dim2) orand1 qorand1 norand1 morand1
@@ -5030,8 +5020,12 @@ let obfuscate dim dim2 l crand qrand arand orand1 qorand1 norand1 morand1 arand1
   let ancilla = get_random_circuit dim2 crand qrand arand in
   let newgates = offset_circuit dim2 (add dim dim2) ancilla in
   let composite = merge_random (add dim dim2) firstpass newgates mergerand in
+  let cnotsadd =
+    add_random_obfuscated_CNOTs (add dim dim2) nrand mrand l1rand l2rand
+      composite
+  in
   add_local_obfuscation (add dim dim2) orand2 qorand2 norand2 morand2 arand2
-    composite
+    cnotsadd
 
 (** val teleport_expand : int -> int list -> rzk_ucom_l -> rzk_ucom_l **)
 

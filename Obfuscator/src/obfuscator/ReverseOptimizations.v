@@ -31,26 +31,42 @@ Fixpoint get_shifted_gate_list {dim} (q1 q2 : nat) (l : Rzk_ucom_l dim) :=
                                    else (get_shifted_gate_list q1 q2 t)
   end.
 
-(* Return List of gates with q1 and q2 swapped, ie. every gate that acted on q1 now acts on q2 and vice versa *)
+(* Exchange q1 and q2 in one wire index.  Keeping this operation separate is
+   important for multi-qubit gates: both operands must be renamed from the
+   original gate, rather than updating one operand and then inspecting the
+   partially updated gate. *)
+Definition swap_qubit_index (q1 q2 q : nat) :=
+  if q =? q1 then q2 else if q =? q2 then q1 else q.
+
+(* Return a list of gates with q1 and q2 exchanged simultaneously. *)
 Fixpoint swap_qubits {dim} (q1 q2 : nat) (l : Rzk_ucom_l dim) :=
   match l with
   | [] => []
-  | (App1 u n) :: t => if n =? q1
-                     then (@App1 _ dim u q2) :: (swap_qubits q1 q2 t)
-                     else if n =? q2
-                          then (@App1 _ dim u q1) :: (swap_qubits q1 q2 t)
-                          else (@App1 _ dim u n) :: (swap_qubits q1 q2 t)
-  | (App2 u m n) :: t => if (m =? q1)
-                       then (@App2 _ dim u q2 n) :: (swap_qubits q1 q2 t)
-                       else if (n =? q1)
-                            then (@App2 _ dim u m q2) :: (swap_qubits q1 q2 t)
-                            else if (m =? q2)
-                                 then (@App2 _ dim u q1 n) :: (swap_qubits q1 q2 t)
-                                 else if (n =? q2)
-                                      then (@App2 _ dim u m q1) :: (swap_qubits q1 q2 t)
-                                      else (@App2 _ dim u m n) :: (swap_qubits q1 q2 t)
-  | (App3 u m n p) :: t => (@App3 _ dim u m n p) :: (swap_qubits q1 q2 t)
+  | (App1 u n) :: t =>
+      (@App1 _ dim u (swap_qubit_index q1 q2 n)) ::
+      (swap_qubits q1 q2 t)
+  | (App2 u m n) :: t =>
+      (@App2 _ dim u
+             (swap_qubit_index q1 q2 m)
+             (swap_qubit_index q1 q2 n)) ::
+      (swap_qubits q1 q2 t)
+  | (App3 u m n p) :: t =>
+      (@App3 _ dim u
+             (swap_qubit_index q1 q2 m)
+             (swap_qubit_index q1 q2 n)
+             (swap_qubit_index q1 q2 p)) ::
+      (swap_qubits q1 q2 t)
   end.
+
+Example swap_qubits_exchanges_both_CNOT_operands :
+  swap_qubits 0 1 (CNOT 0 1 :: [] : Rzk_ucom_l 2) =
+  (CNOT 1 0 :: [] : Rzk_ucom_l 2).
+Proof. reflexivity. Qed.
+
+Example swap_qubits_does_not_create_self_CNOT :
+  swap_qubits 0 1 (CNOT 0 2 :: [] : Rzk_ucom_l 3) =
+  (CNOT 1 2 :: [] : Rzk_ucom_l 3).
+Proof. reflexivity. Qed.
 
 (* Hadamard Reduction Optimization
 
@@ -203,9 +219,10 @@ Definition add_obfuscated_X {dim} m n q (l : Rzk_ucom_l dim) :=
         end
   end.
 
-
+(* Rz indices have period 2 * Rzk_k.  The old expression Rzk_k - i
+   differed from the inverse by Z rather than by a global phase. *)
 Definition Rz_create_rule' {dim} i q (l : Rzk_ucom_l dim) :=
-  Some([Rz i q] ++ [Rz (32768 - i) q] ++ l).
+  Some([Rz i q] ++ [Rz (2 * Rzk_k - i) q] ++ l).
 
 Fixpoint Rz_create_rule {dim} n i q (l : Rzk_ucom_l dim) :=
   match l with
@@ -532,7 +549,7 @@ Definition obfuscate {dim} (dim2 : nat) (l : Rzk_ucom_l dim)
     let newgates := offset_circuit (dim + dim2) ancilla in
     let composite := merge_random firstpass newgates mergerand in
     let cnotsadd := add_random_obfuscated_CNOTs nrand mrand l1rand l2rand composite in
-    let secondpass := add_local_obfuscation orand2 qorand2 norand2 morand2 arand2 composite in
+    let secondpass := add_local_obfuscation orand2 qorand2 norand2 morand2 arand2 cnotsadd in
     secondpass.
 
 Definition teleport_expand {dim} (flags: list nat) (l : Rzk_ucom_l dim) :=

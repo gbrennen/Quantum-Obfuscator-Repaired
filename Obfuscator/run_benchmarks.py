@@ -14,12 +14,67 @@ from qiskit.transpiler.passes import Unroller, Optimize1qGates, CommutationAnaly
 import sys
 import pyzx as zx
 import re
+import subprocess
+
+
+OBFUSCATOR_SEED = 42
+OBFUSCATOR_COUNT_RE = re.compile(
+    r"^(Original|Final after obfuscation|After optimization with VOQC):"
+    r"\s*Total\s+(\d+),.*\bCNOT\s+(\d+)\s*$"
+)
+
+
+def parse_obfuscator_counts(output):
+    """Extract gate counts from labeled obfuscator status lines."""
+    counts = {}
+    for line in output.splitlines():
+        match = OBFUSCATOR_COUNT_RE.match(line)
+        if match is None:
+            continue
+        label = match.group(1)
+        if label in counts:
+            raise ValueError("duplicate obfuscator output record: {}".format(label))
+        counts[label] = (int(match.group(2)), int(match.group(3)))
+
+    required = (
+        "Original",
+        "Final after obfuscation",
+        "After optimization with VOQC",
+    )
+    missing = [label for label in required if label not in counts]
+    if missing:
+        raise ValueError(
+            "obfuscator output is missing labeled count record(s): {}\n{}"
+            .format(", ".join(missing), output)
+        )
+    return counts
 
 def count(d):
     sum = 0
     for k in d.keys():
         sum += d[k]
     return sum
+
+
+def count_qasm_instructions(output):
+    """Count executable statements in flattened OpenQASM text."""
+    metadata_prefixes = (
+        "OPENQASM", "include", "qreg", "creg", "gate", "opaque", "barrier"
+    )
+    instruction_count = 0
+    saw_header = False
+    for raw_line in output.splitlines():
+        line = raw_line.split("//", 1)[0].strip()
+        if line.startswith("OPENQASM"):
+            saw_header = True
+        if not line or line.startswith(metadata_prefixes):
+            continue
+        if not line.endswith(";"):
+            raise ValueError("unexpected staq output line: {}".format(raw_line))
+        instruction_count += 1
+    if not saw_header:
+        raise ValueError("staq output did not contain an OPENQASM header")
+    return instruction_count
     
 def get_closest_multiple_of_pi(theta):
     l = [x * (math.pi/4) for x in range(-7,8)]
@@ -34,21 +89,40 @@ def run_on_file(fname,file_handler,logfile):
     # Call the obfuscator; this also runs VOQC
     obfuscated_file = "results/"+file_handler+"-obfuscated.qasm"
     post_voqc_file = "results/"+file_handler+"-aftervoqc.qasm"
-    stream_obf = os.popen("dune exec ./obfuscator.exe {} {} {} --root extraction".format(
-        fname, obfuscated_file, post_voqc_file
-    ))
-    output_obf = stream_obf.readlines()
-    if (len(output_obf) < 9):
-        return 0
-    gates_orig = int(output_obf[1].split(' ')[2][:-1])
-    cnot_orig = int(output_obf[1].split(' ')[-1][:-1])
-    gates_obf = int(output_obf[4].split(' ')[4][:-1])
-    cnot_obf =int(output_obf[4].split(' ')[-1][:-1])
-    gates_voqc = int(output_obf[8].split(' ')[5][:-1])
+    command = [
+        "dune", "exec", "--root", "extraction", "./obfuscator.exe", "--",
+        fname, obfuscated_file, post_voqc_file,
+        "--seed", str(OBFUSCATOR_SEED),
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as error:
+        raise RuntimeError(
+            "obfuscator failed for {} (exit {}):\nstdout:\n{}\nstderr:\n{}"
+            .format(fname, error.returncode, error.stdout, error.stderr)
+        ) from error
+
+    counts = parse_obfuscator_counts(completed.stdout)
+    gates_orig, cnot_orig = counts["Original"]
+    gates_obf, cnot_obf = counts["Final after obfuscation"]
+    gates_voqc, _ = counts["After optimization with VOQC"]
 
     # Run Qiskit
 
-    if (os.path.exists(obfuscated_file) == False): return 0
+    missing_outputs = [
+        path for path in (obfuscated_file, post_voqc_file)
+        if not os.path.exists(path)
+    ]
+    if missing_outputs:
+        raise FileNotFoundError(
+            "obfuscator reported success but did not create: {}"
+            .format(", ".join(missing_outputs))
+        )
 
     inqasm = open(obfuscated_file, "r")
     tmp = open("copy-qiskit.qasm", "w") # hardcoded filename
@@ -99,14 +173,18 @@ def run_on_file(fname,file_handler,logfile):
             tmp.write("t %s;\n" % (b))
             tmp.write("t %s;\n" % (c))
         elif m3:
-            a = m3.group(1)
-            b = m3.group(2)
-            if a!=b:
-                tmp.write("cx %s, %s;\n" % (a, b))
+            a = m3.group(1).strip()
+            b = m3.group(2).strip()
+            if a == b:
+                raise ValueError(
+                    "invalid CNOT in {}: control and target are both {}"
+                    .format(obfuscated_file, a)
+                )
+            tmp.write("cx %s, %s;\n" % (a, b))
         elif m4:
             a = m4.group(1)
             b = m4.group(2)
-            tmp.write("u1(%f) %s;\n" % ((int(a)*3.14/32768), b))
+            tmp.write("u1(%f) %s;\n" % ((int(a)*math.pi/32768), b))
         else:
             tmp.write(line)
     tmp.close()
@@ -144,10 +222,29 @@ def run_on_file(fname,file_handler,logfile):
         gates_qiskit = gates_obf - reductionA
         # f.write("After optimization with Qiskit: {} gates, {} T-gates\n".format(num_gates_before - reduction, t_count_afterA))
 
-    # Run Staq
-    stream = os.popen('./benchmarks/staq/build/staq -S -O2 copy-qiskit.qasm | wc -l')
-    gates_after = stream.read()
-    reductionS = max(num_gates_before - int(gates_after),0)
+    # Run staq and check its status directly.  The old shell pipeline reported
+    # only wc's status, so a missing or crashed staq process could look like a
+    # successful zero-line result.
+    staq_command = [
+        "./benchmarks/staq/build/staq", "-S", "-O2", "copy-qiskit.qasm"
+    ]
+    try:
+        staq_completed = subprocess.run(
+            staq_command,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as error:
+        raise RuntimeError(
+            "staq failed (exit {}):\nstdout:\n{}\nstderr:\n{}"
+            .format(error.returncode, error.stdout, error.stderr)
+        ) from error
+    except OSError as error:
+        raise RuntimeError("could not start staq: {}".format(error)) from error
+
+    gates_after = count_qasm_instructions(staq_completed.stdout)
+    reductionS = max(num_gates_before - gates_after,0)
     gates_staq = gates_obf - reductionS
     # with open(logfile,'a+') as f:
     #     f.write("After Staq optimization, number of gates is " + str(num_gates_before-reduction))

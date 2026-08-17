@@ -72,23 +72,36 @@ end
 module QbitMap = Map.Make(QbitIdx)
 
 (* Controlled gate application *)
+let apply_distinct_c_gate gate ctrl_idx tgt_idx =
+  if ctrl_idx = tgt_idx then
+    raise (Failure
+      (sprintf "Invalid CNOT: both operands resolve to q[%d]" ctrl_idx))
+  else
+    gate ctrl_idx tgt_idx
+
 let apply_c_gate gate ctrl tgt qmap sym_tab =
   let (cid, cidx) = ctrl in
   let (tid, tidx) = tgt in
   match cidx, tidx with
   | Some ci, Some ti ->
-    [gate (QbitMap.find (cid, ci) qmap) (QbitMap.find (tid, ti) qmap)]
+    let ctrl_idx = QbitMap.find (cid, ci) qmap in
+    let tgt_idx = QbitMap.find (tid, ti) qmap in
+    [apply_distinct_c_gate gate ctrl_idx tgt_idx]
   | None, Some ti ->
     (match StringMap.find cid sym_tab with
      | TQReg csize ->
        let tgt_idx = (QbitMap.find (tid, ti) qmap) in
-       List.init csize (fun i -> gate (QbitMap.find (cid, i) qmap) tgt_idx)
+       List.init csize (fun i ->
+         let ctrl_idx = QbitMap.find (cid, i) qmap in
+         apply_distinct_c_gate gate ctrl_idx tgt_idx)
      | _ -> raise (Failure "ERROR: Not a qubit register!"))
   | Some ci, None ->
     (match StringMap.find tid sym_tab with
      | TQReg tsize ->
        let ctrl_idx = (QbitMap.find (cid, ci) qmap) in
-       List.init tsize (fun i -> gate ctrl_idx (QbitMap.find (tid, i) qmap))
+       List.init tsize (fun i ->
+         let tgt_idx = QbitMap.find (tid, i) qmap in
+         apply_distinct_c_gate gate ctrl_idx tgt_idx)
      | _ -> raise (Failure "ERROR: Not a qubit register!"))
   | None, None -> (* parallel application *)
     (match StringMap.find cid sym_tab, StringMap.find tid sym_tab with
@@ -96,18 +109,26 @@ let apply_c_gate gate ctrl tgt qmap sym_tab =
        if csize != tsize
        then raise (Failure "ERROR: register sizes do not match")
        else List.init csize (fun i ->
-           gate (QbitMap.find (cid, i) qmap) (QbitMap.find (tid, i) qmap))
+           let ctrl_idx = QbitMap.find (cid, i) qmap in
+           let tgt_idx = QbitMap.find (tid, i) qmap in
+           apply_distinct_c_gate gate ctrl_idx tgt_idx)
      | _ -> raise (Failure "ERROR: Not a qubit register!"))
 
 (* Doubly-controlled gate application (partial) *)
-let apply_double_c_gate gate ctrl1 ctrl2 tgt qmap sym_tab =
+let apply_double_c_gate gate_name gate ctrl1 ctrl2 tgt qmap sym_tab =
   let _ = ignore sym_tab in
   let (cid1, cidx1) = ctrl1 in
   let (cid2, cidx2) = ctrl2 in
   let (tid, tidx) = tgt in
   match cidx1, cidx2, tidx with
   | Some ci1, Some ci2, Some ti ->
-    gate (QbitMap.find (cid1, ci1) qmap) (QbitMap.find (cid2, ci2) qmap) (QbitMap.find (tid, ti) qmap)
+    let ctrl1_idx = QbitMap.find (cid1, ci1) qmap in
+    let ctrl2_idx = QbitMap.find (cid2, ci2) qmap in
+    let tgt_idx = QbitMap.find (tid, ti) qmap in
+    if ctrl1_idx = ctrl2_idx || ctrl1_idx = tgt_idx || ctrl2_idx = tgt_idx
+    then raise (Failure
+      (sprintf "Invalid %s: operands must resolve to distinct qubits" gate_name))
+    else gate ctrl1_idx ctrl2_idx tgt_idx
   (* ignore other cases... *)
   | _ -> raise (Failure "ERROR: Not a qubit register!")
 
@@ -140,8 +161,8 @@ let translate_statement s qmap sym_tab =
         | Gate (id, params, qargs) ->
           (match StringMap.find_opt id sym_tab with
            | Some TGate _ -> (match id with
-               | "ccz" -> apply_double_c_gate E.cCZ (List.hd qargs) (List.nth qargs 1) (List.nth qargs 2) qmap sym_tab
-               | "ccx" -> apply_double_c_gate E.cCX (List.hd qargs) (List.nth qargs 1) (List.nth qargs 2) qmap sym_tab
+               | "ccz" -> apply_double_c_gate "CCZ" E.cCZ (List.hd qargs) (List.nth qargs 1) (List.nth qargs 2) qmap sym_tab
+               | "ccx" -> apply_double_c_gate "CCX" E.cCX (List.hd qargs) (List.nth qargs 1) (List.nth qargs 2) qmap sym_tab
                | "cx"  -> apply_c_gate _CNOT (List.hd qargs) (List.nth qargs 1) qmap sym_tab
                | "x"   -> apply_gate _X     (List.hd qargs) qmap sym_tab
                | "z"   -> apply_gate _Z     (List.hd qargs) qmap sym_tab
@@ -158,11 +179,27 @@ let translate_statement s qmap sym_tab =
            | Some _ -> raise (Failure "ERROR: Not a gate!")
            | None -> raise (Failure "ERROR: Gate not found!")
           ))
-     | Meas _ -> print_endline ("NYI: Unsupported op: Measure"); []
-     | Reset _ -> print_endline ("NYI: Reset"); [])
-  | If _ -> print_endline ("NYI: If"); []
-  | Barrier _ -> print_endline ("NYI: Unsupported op: Barrier"); []
-  | _ -> []
+     | Meas _ ->
+         raise (Failure
+           "Unsupported OpenQASM construct: measurement. Obfuscate only the coherent unitary prefix and restore measurement explicitly.")
+     | Reset _ ->
+         raise (Failure
+           "Unsupported OpenQASM construct: reset. The obfuscator accepts unitary circuits only."))
+  | If _ ->
+      raise (Failure
+        "Unsupported OpenQASM construct: classical conditional. The obfuscator accepts unitary circuits only.")
+  (* A barrier has no matrix semantics.  It is intentionally omitted rather
+     than being mistaken for an unsupported state-changing operation. *)
+  | Barrier _ -> []
+  (* These statements affect parsing or declarations only.  Their executable
+     uses are handled above, and unsupported user-defined gate calls fail. *)
+  | Include _ -> []
+  | Decl (QReg _) -> []
+  | Decl (CReg _) -> []
+  | GateDecl _ -> []
+  (* This match is deliberately exhaustive for the parser's current AST.
+     Adding a future statement constructor must therefore update this code. *)
+  | OpaqueDecl _ -> []
 
 let parse_decl (s : AST.statement) : (string * int) list =
   match s with
@@ -218,10 +255,18 @@ let sqir_to_qasm_gate oc g =
   | E.App2 (E.URzk_CNOT, m, n) -> fprintf oc "cx q[%d],q[%d];\n" m n
   | _ -> raise (Failure ("ERROR: Failed to write qasm file")) (* badly typed case (e.g. App2 of UPI4_H) *)
 
-let write_qasm_file fname p dim =
+let write_qasm_file ?(original_wire_map = []) fname p dim =
   let oc = open_out fname in
   (fprintf oc "OPENQASM 2.0;\ninclude \"qelib1.inc\";\n\n";
    fprintf oc "qreg q[%d];\n" dim;
+   if original_wire_map <> [] then begin
+     fprintf oc "\n// Original logical-wire placement map (advisory):\n";
+     List.iteri
+       (fun logical physical ->
+          fprintf oc "// logical q[%d] -> physical q[%d]\n"
+            logical physical)
+       original_wire_map
+   end;
    fprintf oc "\n";
    ignore(List.map (sqir_to_qasm_gate oc) p);
    close_out oc)
