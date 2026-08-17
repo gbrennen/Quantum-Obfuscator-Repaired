@@ -192,15 +192,6 @@ optimization and the quantum minimum-equivalent-circuit problem (QMECP) more
 difficult.  QMECP asks for a smaller circuit with the same operation.  Even
 resistance to that task is an empirical goal here, not a proof.
 
-For an outer protection layer around a fused `KeyGen`, global resistance to
-shrinking is not enough.  An attacker may instead look for one useful internal
-entry point, such as a continuation that accepts a caller-chosen label.  The
-repository contains no proof that such an interface is hidden, no protection
-against adaptive quantum access to that interface, and no authentication of
-intermediate states.  Any use in that setting therefore needs a separately
-stated and tested interface-extraction assumption or a stronger cryptographic
-outer obfuscator.
-
 ## Verification still needed
 
 Before relying on this branch for new experimental results:
